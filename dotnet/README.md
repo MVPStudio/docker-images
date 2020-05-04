@@ -12,7 +12,7 @@ at the `Dockerfile` which versions inside one of the version directories. The v1
 3.1 dotnet and aspnetcore runtimes.
 
 To create a complete a Dockerfile for individual projects, be sure to create a Dockerfile with 
-content similar to what is shown below. Replace <VERSION> with the latest version, e.g. `v1`,
+content similar to what is shown below. Replace <VERSION> with the latest version, e.g. `v01`,
 and all instances of `LittleHelpBook` with the appropriate project name. Once these replacements 
 are made, the Dockerfile should be complete.
 
