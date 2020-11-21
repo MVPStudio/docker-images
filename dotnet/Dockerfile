@@ -11,5 +11,5 @@ RUN apt-get install wget && \
     mv microsoft.asc.gpg /etc/apt/trusted.gpg.d/ && \
     wget https://packages.microsoft.com/config/debian/10/prod.list && \
     mv prod.list /etc/apt/sources.list.d/microsoft-prod.list && \
-    apt-get update && apt-get install -y dotnet-runtime-3.1 && \
-    apt-get install aspnetcore-runtime-3.1
+    apt-get update && apt-get install -y dotnet-runtime-5.0 && \
+    apt-get install aspnetcore-runtime-5.0
