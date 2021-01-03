@@ -1,1 +1,0 @@
-This container is used in our CI to build, publish, and deploy docker containers.
