@@ -27,9 +27,6 @@ def parse_args():
                         help='If given build only this container and the containers on which it depends (unless '
                         '--no_depends is given). The values passed should be repo names like "mvpstudio/base". Can '
                         'pass this argument more than once to build more than one container.')
-    parser.add_argument('-n', '--no_depends', action='store_true', default=False,
-                        help='Build only the images specified by --only and do not build the images upon which they '
-                        'depend. This will therefore fail if the dependent images are not already built.')
     args = parser.parse_args()
     return args
 
@@ -48,9 +45,9 @@ class ImageToBuild:
             The version of the container to build and push.
 
         deps : list of str
-            A list of other containers upon which this one depends. Can be either just a repo name (e.g. mvpstudio/base)
-            or a name and a version (e.g. mvpstudio/base:v001). In the former case we'll find the container.yml file for
-            the image in it's directory in this repo and use that as the version for the dependency.
+            A list of other containers upon which this one depends. Should be either just a repo name (e.g.
+            mvpstudio/base).  We'll find the container.yml file for the image in it's directory in this repo and use
+            that as the version for the dependency.
 
         directory : pathlib.Path
             Path to the directory holding the container.yml and Dockerfile.template files.
@@ -62,39 +59,60 @@ class ImageToBuild:
 
 
 def stringify_version(to_build):
-    return '%04d' % to_build.version
+    return 'v%03d' % to_build.version
 
 
-def build_one(to_build):
+def build_one(to_build, built):
     """Sets up the context, filling in the template information from Dockerfile.template, and runs docker build.
 
     Parameters
     ----------
     to_build : ImageToBuild
         The image we should build.
+
+    built : dict from str to ImageToBuild
+        A dict mapping the repo name of an image to the ImageToBuild for that image. This dict contains only
+        images that were already built.
     """
     log.info('Building %s:%s', to_build.repo, stringify_version(to_build))
-    pass
+    build_dir = BUILD_DIR / to_build.directory
+    if build_dir.exists():
+        # Remove the build directory if it exists so we don't accidentally have some stale data in the docker context
+        # from a previous build.
+        shutil.rmtree(build_dir)
+    build_dir.mkdir(parents=True)
+    context_dir = to_build.directory / 'context'
+    if context_dir.exists():
+        shutil.copytree(context_dir, build_dir)
+
+    with open(to_build.directory / 'Dockerfile.template', 'r') as docker_template:
+        template_data = {repo.split('/')[1]: stringify_version(img) for repo, img in built.items()}
+        rendered = chevron.render(docker_template, template_data)
+    with open(build_dir / 'Dockerfile', 'w') as outf:
+        outf.write(rendered)
+
+    subprocess.check_call([
+        'docker', 'build', '-t',
+        '%s:%s' % (to_build.repo, stringify_version(to_build)),
+        str(build_dir)])
 
 
-def do_builds(to_build, no_deps):
-    if no_deps:
-        ready = copy.copy(to_build)
-        to_build = {}
-    else:
-        ready = {}
-        for candidate in to_build.values():
-            if len(candidate.deps) == 0:
-                log.info('%s has no dependencies and can be built immediately', candidate.repo)
-                ready[candidate.repo] = candidate
-        for r in ready.keys():
-            del to_build[r]
+def do_builds(to_build):
+    # build up a map from repo name to the ImageToBuild for images that we're ready to build (all their dependencies
+    # have been built).
+    ready = {}
+    for candidate in to_build.values():
+        if len(candidate.deps) == 0:
+            log.info('%s has no dependencies and can be built immediately', candidate.repo)
+            ready[candidate.repo] = candidate
+    for r in ready.keys():
+        del to_build[r]
 
-    built = set()
+    built = {}
     while len(ready) > 0:
         next_build = next(iter(ready.values()))
-        build_one(next_build)
-        built.add(next_build)
+        build_one(next_build, built)
+        built[next_build.repo] = next_build
         del ready[next_build.repo]
 
         # The following is far less efficient than it might be but it shouldn't matter.
@@ -105,7 +123,8 @@ def do_builds(to_build, no_deps):
             else:
                 log.info('%s is now ready to be built.', candidate.repo)
                 ready[candidate.repo] = candidate
-                del to_build[candidate.repo]
+        for r in ready.keys():
+            del to_build[r]
 
     if len(to_build) != 0:
         log.error('Unable to build all containers.')
@@ -135,7 +154,7 @@ def main():
         to_build = copy.copy(all_containers)
     print('to_build', to_build)
 
-    do_builds(to_build, args.no_depends)
+    do_builds(to_build)
 
 
 if __name__ == '__main__':

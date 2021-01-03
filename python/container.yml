@@ -1,0 +1,4 @@
+repo: mvpstudio/python
+version: 4
+deps:
+   - mvpstudio/base
