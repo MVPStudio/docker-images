@@ -62,7 +62,7 @@ def stringify_version(to_build):
     return 'v%03d' % to_build.version
 
 
-def build_one(to_build, built):
+def build_one(to_build, built, push):
     """Sets up the context, filling in the template information from Dockerfile.template, and runs docker build.
 
     Parameters
@@ -73,6 +73,9 @@ def build_one(to_build, built):
     built : dict from str to ImageToBuild
         A dict mapping the repo name of an image to the ImageToBuild for that image. This dict contains only
         images that were already built.
+
+    push : bool
+        If true push the image after building it. If false, don't.
     """
     log.info('Building %s:%s', to_build.repo, stringify_version(to_build))
     build_dir = BUILD_DIR / to_build.directory
@@ -91,13 +94,24 @@ def build_one(to_build, built):
     with open(build_dir / 'Dockerfile', 'w') as outf:
         outf.write(rendered)
 
-    subprocess.check_call([
-        'docker', 'build', '-t',
-        '%s:%s' % (to_build.repo, stringify_version(to_build)),
-        str(build_dir)])
+    tag = '%s:%s' % (to_build.repo, stringify_version(to_build))
+    subprocess.check_call(['docker', 'build', '-t', tag, str(build_dir)])
+
+    if push:
+        subprocess.check_call(['docker', 'push', tag])
 
 
-def do_builds(to_build):
+def do_builds(to_build, push):
+    """Build everything in topological order.
+
+    Parameters
+    ----------
+    to_build : dict from str to ImageToBuild
+        Map from repo name to the ImageToBuild for everything that is to be built.
+
+    push : bool
+        Indicates if we should push the images after building them or not.
+    """
     # build up a map from repo name to the ImageToBuild for images that we're ready to build (all their dependencies
     # have been built).
     ready = {}
@@ -111,7 +125,7 @@ def do_builds(to_build):
     built = {}
     while len(ready) > 0:
         next_build = next(iter(ready.values()))
-        build_one(next_build, built)
+        build_one(next_build, built, push)
         built[next_build.repo] = next_build
         del ready[next_build.repo]
 
@@ -152,9 +166,8 @@ def main():
         to_build = {r: c for r, c in all_containers.items() if r in only_set}
     else:
         to_build = copy.copy(all_containers)
-    print('to_build', to_build)
 
-    do_builds(to_build)
+    do_builds(to_build, not args.no_push)
 
 
 if __name__ == '__main__':
