@@ -9,32 +9,74 @@ how to patch each individually. However, since all our images are based off `bas
 then rebuild the rest. Similarly, if there was a vulnerability in node.js we could update just our `node` image and then
 rebuild anything that's based off that.
 
+# Layout
+
+The `build-push.py` script in this repo lets us recursively build all our images in dependency order. That is, suppose
+make a change to our base image and we want to rebuild it and everything that depends on it. To do that you'd just
+change the base image and run `build-push.py` and it would automatically build all the other images. In order to do
+that each image must have a special format in this directory:
+
++ image-dir/
+  + container.yml
+  + Dockerfile.template
+  + context/
+    + <files that belong in the Docker context>
+
+`container.yml` is a yml file that looks something like:
+
+```
+repo: mvpstudio/python
+version: 4
+deps:
+   - mvpstudio/base
+```
+
+The fields are:
+
+* repo: the Docker repository to which the built image should be pushed.
+* version: an integer indicating the version number to build and push. If you update your image you should almost
+  certainly update this as well.
+* deps: a list of other Docker images, without version nubmers, that this depends on. In the example above, the Python
+  image is based on our base image so it depends on `mvpstudio/base` and `build-push.py` will esure that is built first.
+
+The Dockerfile.template is a [mustache template](http://mustache.github.io/) that expands to your `Dockerfile`. And the
+context directory should contain the entire Docker context that should be used to build your image _except_ for the
+`Dockerfile`.
+
+The `Dockerfile.template` is a simple mustache template that will be called with a dictionary mapping The 2nd half of
+the Docker repo name to the version of the image in that repo. For example, the `Dockerfile.template` for our Python
+image looks like:
+
+```
+FROM mvpstudio/base:{{ base }}
+
+RUN apt-get update -y && \
+    apt-get install -y python3 python3-dev python3-pip
+```
+
+Note that's a regular `Dockerfile` except for the `{{ base }}` part - that will be expanded to match the `version`
+specified in `base/container.yml`.
+
+`build-push.py` then constructs a final Docker context under the `build` directory containing all the files in `context`
+plus the expanded `Dockerfile.template` and it builds the image. Once it's built one image the others that depended upon
+it can now be built, etc. and so eventually all the images will be built.
+
 # Building
 
 All the images in here are built automatically by CircleCI upon merge to `master`. The build is configured via the
 `.circleci/config.yml` file here and the CircliCI build itself can be found in the [`docker-images`
 project](https://app.circleci.com/pipelines/github/MVPStudio/docker-images) on CircleCI.
 
-Currently the `.circleci/config.yml` file _explicitly lists the version tags_ for each image so if you modify an image
-you must also modify that file. It also currently duplicates, via copy-and-past, the jobs. It is an open TODO to:
-
-1. Make the versioning automatic (pull the current tags, increment the highest, and use that).
-2. Use [CircleCI's reusable config](https://circleci.com/docs/2.0/reusing-config) tools so that everything isn't cut and
-   paste.
-3. Each run is currently a separate job so that it must duplicate the steps of pulling the previous images. It should
-   instead be a series of steps in a single job so a container that depends on another doesn't have to pull the build
-   for the previous one.
-4. Turn the `Dockerfile`s into templates so that the proper tags for dependencies can be injected. That is, if `python`
-   depends on `base` and we push a change to `base` we'd like the `FROM mvpstudio/base:<version>` line to have it's
-   `<version>` replaced with the newly built version of base so it gets properly rebuilt.
-5. Automatically infer the dependency graph from the `FROM` lines in the images so it doesn't have to be hard-coded.
-
-Pull requests to tackle any of the above are welcome.
+Note that in order to run `build-push.py` you should already be logged into Dockerhub; if you aren't run `docker login`.
+That script also has a few simple dependencies. To install them all run `pip install -r requirements.txt`.
 
 # Versioning
 
 We do *not* use the common `latest` tag ever. That's because if you use `latest` it can be hard to know when the image
-was last built so you don't know what software it contained. Instead, we use explicit versioning like `v1`, `v2`, etc.
+was last built so you don't know what software it contained.  Furthermore, if you use `latest` Kubernetes won't be able
+to know when the image was updated so it won't pull new versions. Instead, we use explicit versioning like `v1`, `v2`,
+etc. In the `container.yml` you specify the version as a plain integer but `build-push.py` expands that into something
+like `v002`.
 
 # MVP User
 
