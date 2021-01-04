@@ -52,8 +52,9 @@ def get_max_version(repo):
     # requires authentication and all we need is the public tag data.
     tag_re = re.compile('^v(\d+)$')
     max_tag = 0
-    page_size = 2
+    page_size = 100
     next = 'https://registry.hub.docker.com/v2/repositories/mvpstudio/%s/tags?page_size=%s' % (repo, page_size)
+    log.info('Fetching tag information for %s', repo)
     while True:
         result = requests.get(next)
         result.raise_for_status()
