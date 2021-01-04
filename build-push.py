@@ -6,7 +6,8 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import yaml
+import requests
+import re
 
 
 THIS_DIR = pathlib.Path(__file__).parent
@@ -25,41 +26,89 @@ def parse_args():
                         help='If given, build the containers but do not push them.')
     parser.add_argument('-o', '--only', action='append', type=str,
                         help='If given build only this container and the containers on which it depends (unless '
-                        '--no_depends is given). The values passed should be repo names like "mvpstudio/base". Can '
-                        'pass this argument more than once to build more than one container.')
+                        '--no_depends is given). The values passed should be repo names omitting the mvpstudio/ prefix '
+                        '(e.g. like "base" to indicate mvpstudio/base). Can pass this argument more than once to build '
+                        'more than one container.')
     args = parser.parse_args()
     return args
 
 
+def get_max_version(repo):
+    """Returns a list of the largest integer extracted from a tag in the format vX. Tags that don't match vX where X is
+    an integer are ignored. If no matching tags are found a 0 is returned.
+
+    Parameters
+    ----------
+    repo : str
+        The short repo name; that is, the name omitting the `mvpstudio/` prefix.
+    """
+    # Note that the following is an undocumented dockerhub API. It appears to be the standard v2 API
+    # (https://docs.docker.com/registry/spec/api/#listing-image-tags) given the `v2/` part of the URL but it isn't.
+    # Dockerhub _does_ support the standard v2 API at:
+    #
+    # https://registry.hub.docker.com/v2/mvpstudio/%s/tags/list
+    #
+    # Note the missing `repositories/` and the additonal `list` in the URL. We don't use the V2 API however since that
+    # requires authentication and all we need is the public tag data.
+    tag_re = re.compile('^v(\d+)$')
+    max_tag = 0
+    page_size = 2
+    next = 'https://registry.hub.docker.com/v2/repositories/mvpstudio/%s/tags?page_size=%s' % (repo, page_size)
+    while True:
+        result = requests.get(next)
+        result.raise_for_status()
+        result_json = result.json()
+        for tag_data in result_json['results']:
+            log.debug('Found tag: %s', tag_data['name'])
+            m = tag_re.fullmatch(tag_data['name'])
+            if m is not None:
+                tag_version = int(m.group(1))
+                max_tag = max(max_tag, tag_version)
+            else:
+                log.debug('Ignoring tag %s as it is not in vX format with X being an integer.', tag_data['name'])
+        if result_json['next'] is None:
+            break
+        else:
+            next = result_json['next']
+    return max_tag
+
+
 class ImageToBuild:
     """An image to be built."""
-    def __init__(self, repo, version, deps, directory):
+    def __init__(self, directory, version, deps):
         """Constructor.
 
         Parameters
         ----------
-        repo : str
-            The repo for the image (e.g. mvpstudio/base).
+        directory : pathlib.Path
+            Path to the directory holding the container.yml and Dockerfile.template files.
 
         version : int
             The version of the container to build and push.
 
         deps : list of str
-            A list of other containers upon which this one depends. Should be either just a repo name (e.g.
-            mvpstudio/base).  We'll find the container.yml file for the image in it's directory in this repo and use
-            that as the version for the dependency.
-
-        directory : pathlib.Path
-            Path to the directory holding the container.yml and Dockerfile.template files.
+            A list of other containers upon which this one depends. Should be just a short repo name (e.g.
+            "base"). We'll figure out the version that corresponds to by pulling the repo data for the dependency from
+            Dockerhub.
         """
-        self.repo = repo
+        self.directory = directory
         self.version = version
         self.deps = deps
-        self.directory = directory
 
+    @property
+    def repo(self):
+        """The "short" repo name - the repo without the 'mvpstudio/' prefix."""
+        return self.directory.name
 
-def stringify_version(to_build):
-    return 'v%03d' % to_build.version
+    @property
+    def full_repo(self):
+        """The full repo including the prefix."""
+        return 'mvpstudio/%s' % self.repo
+
+    @property
+    def string_version(self):
+        """The stringified version, with leading `v` and left-padded 0's."""
+        return 'v%03d' % self.version
 
 
 def build_one(to_build, built, push):
@@ -77,7 +126,7 @@ def build_one(to_build, built, push):
     push : bool
         If true push the image after building it. If false, don't.
     """
-    log.info('Building %s:%s', to_build.repo, stringify_version(to_build))
+    log.info('Building %s:%s', to_build.repo, to_build.string_version)
     build_dir = BUILD_DIR / to_build.directory
     if build_dir.exists():
         # Remove the build directory if it exists so we don't accidentally have some stale data in the docker context
@@ -89,12 +138,12 @@ def build_one(to_build, built, push):
         shutil.copytree(context_dir, build_dir)
 
     with open(to_build.directory / 'Dockerfile.template', 'r') as docker_template:
-        template_data = {repo.split('/')[1]: stringify_version(img) for repo, img in built.items()}
+        template_data = {repo: img.string_version for repo, img in built.items()}
         rendered = chevron.render(docker_template, template_data)
     with open(build_dir / 'Dockerfile', 'w') as outf:
         outf.write(rendered)
 
-    tag = '%s:%s' % (to_build.repo, stringify_version(to_build))
+    tag = '%s:%s' % (to_build.full_repo, to_build.string_version)
     subprocess.check_call(['docker', 'build', '-t', tag, str(build_dir)])
 
     if push:
@@ -153,11 +202,19 @@ def main():
     log.info('Looking for container to build under %s', THIS_DIR.resolve())
     # Build up a dict from repo to ImageToBuild.
     all_containers = {}
-    for contianer_file in THIS_DIR.glob('*/container.yml'):
-        log.info('Parsing %s', contianer_file)
-        with contianer_file.open() as inf:
-            cd = yaml.load(inf, Loader=yaml.SafeLoader)
-            all_containers[cd['repo']] = ImageToBuild(directory=contianer_file.parent, **cd)
+    for dockerfile_templ in THIS_DIR.glob('*/Dockerfile.template'):
+        log.info('Parsing %s', dockerfile_templ)
+        repo = dockerfile_templ.parent.name
+        version = get_max_version(repo) + 1
+        with open(dockerfile_templ, 'r') as tf:
+            tokens = chevron.tokenizer.tokenize(tf)
+            deps = [x[1] for x in tokens if x[0] == 'variable']
+            log.info('Found repo %s with version %s and deps %s',
+                     repo, version, deps)
+            all_containers[repo] = ImageToBuild(
+                directory=dockerfile_templ.parent,
+                version=version,
+                deps=deps)
 
     # to_build is like all_containers but contains only the images we actually want to build.
     to_build = {}
