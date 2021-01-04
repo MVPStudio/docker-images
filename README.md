@@ -16,35 +16,21 @@ make a change to our base image and we want to rebuild it and everything that de
 change the base image and run `build-push.py` and it would automatically build all the other images. In order to do
 that each image must have a special format in this directory:
 
-+ image-dir/
-  + container.yml
++ <repo>/
   + Dockerfile.template
   + context/
     + <files that belong in the Docker context>
 
-`container.yml` is a yml file that looks something like:
-
-```
-repo: mvpstudio/python
-version: 4
-deps:
-   - mvpstudio/base
-```
-
-The fields are:
-
-* repo: the Docker repository to which the built image should be pushed.
-* version: an integer indicating the version number to build and push. If you update your image you should almost
-  certainly update this as well.
-* deps: a list of other Docker images, without version nubmers, that this depends on. In the example above, the Python
-  image is based on our base image so it depends on `mvpstudio/base` and `build-push.py` will esure that is built first.
+Note that `<repo>` is a directory name and it must match the "short name" of the Dockerhub repo whose image it builds.
+By "short name" here we mean the name of the repo with the `mvpstudio/` prefix omitted.  That is, the directory that
+builds `mvpstudio/base` must be called `base` and the directory that builds `mvpstudio/python` must be called `python`.
 
 The Dockerfile.template is a [mustache template](http://mustache.github.io/) that expands to your `Dockerfile`. And the
 context directory should contain the entire Docker context that should be used to build your image _except_ for the
 `Dockerfile`.
 
-The `Dockerfile.template` is a simple mustache template that will be called with a dictionary mapping The 2nd half of
-the Docker repo name to the version of the image in that repo. For example, the `Dockerfile.template` for our Python
+The `Dockerfile.template` is a simple mustache template that will be called with a dictionary mapping the short repo
+name name to the version of the image in that repo. For example, the `Dockerfile.template` for our Python
 image looks like:
 
 ```
@@ -55,7 +41,10 @@ RUN apt-get update -y && \
 ```
 
 Note that's a regular `Dockerfile` except for the `{{ base }}` part - that will be expanded to match the `version`
-specified in `base/container.yml`.
+specified in `base/container.yml`. We also rely on this format to determine dependencies between images. If the
+`Dockefile.template` for image A refers to the version number for image B via a Mustache parameter (as the python image
+example above refers to the `base` repo) then we say that A has a dependency on B so we'll build image B before we build
+A and we'll inject the new version number for B into A's `Dockerfile`.
 
 `build-push.py` then constructs a final Docker context under the `build` directory containing all the files in `context`
 plus the expanded `Dockerfile.template` and it builds the image. Once it's built one image the others that depended upon
@@ -67,16 +56,17 @@ All the images in here are built automatically by CircleCI upon merge to `master
 `.circleci/config.yml` file here and the CircliCI build itself can be found in the [`docker-images`
 project](https://app.circleci.com/pipelines/github/MVPStudio/docker-images) on CircleCI.
 
-Note that in order to run `build-push.py` you should already be logged into Dockerhub; if you aren't run `docker login`.
-That script also has a few simple dependencies. To install them all run `pip install -r requirements.txt`.
+Note that in order to run `build-push.py` manually you should already be logged into Dockerhub; if you aren't run
+`docker login`.  That script also has a few simple dependencies. To install them all run `pip install -r
+requirements.txt`.
 
 # Versioning
 
 We do *not* use the common `latest` tag ever. That's because if you use `latest` it can be hard to know when the image
 was last built so you don't know what software it contained.  Furthermore, if you use `latest` Kubernetes won't be able
-to know when the image was updated so it won't pull new versions. Instead, we use explicit versioning like `v1`, `v2`,
-etc. In the `container.yml` you specify the version as a plain integer but `build-push.py` expands that into something
-like `v002`.
+to know when the image was updated so it won't pull new versions. Instead, we use explicit versioning like `v001`,
+`v002`, etc. Version numbers are automatically determined by querying Dockerhub for the current version of an image and
+then incrementing by 1.
 
 # MVP User
 
