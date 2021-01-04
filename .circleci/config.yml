@@ -12,3 +12,12 @@ jobs:
             pip install -r requirements.txt
             echo $DOCKER_PWD | docker login -u $DOCKER_LOGIN --password-stdin
             python build-push.py
+workflows:
+   version: 2
+   build-publish-all:
+      jobs:
+         - build:
+            context: dockerhub-publish
+            filters:
+               branches:
+                  only: master
