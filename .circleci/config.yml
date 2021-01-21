@@ -11,8 +11,8 @@ jobs:
           command: |
             echo $DOCKER_PWD | docker login -u $DOCKER_LOGIN --password-stdin
 
-            docker build ./base/v1 -t mvpstudio/base:v1
-            docker push mvpstudio/base:v1
+            docker build ./base -t mvpstudio/base:v2
+            docker push mvpstudio/base:v2
 
   node:
     docker:
@@ -67,8 +67,8 @@ jobs:
           command: |
             echo $DOCKER_PWD | docker login -u $DOCKER_LOGIN --password-stdin
 
-            docker build ./python/3 -t mvpstudio/python:3
-            docker push mvpstudio/python:3
+            docker build ./python -t mvpstudio/python:v4
+            docker push mvpstudio/python:v4
 
   mysql-client:
     docker:
