@@ -2,3 +2,5 @@
 .DS_Store
 .vscode
 /.vs
+/venv/
+/build/
